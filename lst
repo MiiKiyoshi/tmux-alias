@@ -2,7 +2,7 @@
 # lst - tmux pane 목록 (계층적 출력, 현재 위치에 * 표시)
 #
 # Usage:
-#   lst      기본 (실행파일 basename만 표시)
+#   lst      기본 (실행파일 basename, 긴 경로 축약)
 #   lst -v   verbose (전체 경로 표시)
 
 verbose=0
@@ -11,6 +11,61 @@ while getopts "v" opt; do
     v) verbose=1 ;;
   esac
 done
+
+# 경로 축약: 맨 앞 유지, 중간 첫글자, 마지막 유지
+# ~/tools/micromamba/envs/kiyoshi/bin/gpustat → ~/tools/m/e/k/b/gpustat
+shorten_path() {
+  local p="$1"
+  local threshold=40
+
+  [ ${#p} -le $threshold ] && { echo "$p"; return; }
+
+  local prefix="" rest="$p"
+
+  # ~/ 또는 / 로 시작하는 경우 첫 디렉토리까지 보존
+  if [[ "$p" == "~/"* ]]; then
+    prefix="~/"
+    rest="${p#\~/}"
+    # 첫 디렉토리 보존
+    local first="${rest%%/*}"
+    if [[ "$rest" == */* ]]; then
+      prefix="~/$first/"
+      rest="${rest#*/}"
+    else
+      echo "$p"; return
+    fi
+  elif [[ "$p" == /* ]]; then
+    rest="${p#/}"
+    local first="${rest%%/*}"
+    if [[ "$rest" == */* ]]; then
+      prefix="/$first/"
+      rest="${rest#*/}"
+    else
+      echo "$p"; return
+    fi
+  else
+    echo "$p"; return
+  fi
+
+  # 마지막 컴포넌트 분리
+  local last="${rest##*/}"
+  local middle="${rest%/*}"
+
+  if [ "$middle" = "$rest" ]; then
+    # 중간 없음
+    echo "${prefix}${last}"
+    return
+  fi
+
+  # 중간 디렉토리들 첫 글자로
+  local short_middle=""
+  IFS='/' read -ra parts <<< "$middle"
+  for part in "${parts[@]}"; do
+    [ -n "$part" ] && short_middle+="${part:0:1}/"
+  done
+
+  echo "${prefix}${short_middle}${last}"
+}
 
 prev_s=""
 prev_w=""
@@ -37,16 +92,28 @@ while IFS='|' read -r s widx wname pidx tty cwd; do
   cwd="${cwd/#$HOME/\~}"
   cmd="${cmd//$HOME/\~}"
 
-  # 기본: 첫 토큰만 basename, -v: 전체 경로
   if [ "$verbose" -eq 0 ]; then
+    # 첫 토큰 basename
     cmd_first="${cmd%% *}"
     cmd_rest="${cmd#* }"
     cmd_base="$(basename -- "$cmd_first")"
+
     if [ "$cmd_first" = "$cmd" ]; then
       cmd="$cmd_base"
     else
-      cmd="$cmd_base $cmd_rest"
+      # 나머지 토큰들 경로 축약
+      new_rest=""
+      for token in $cmd_rest; do
+        if [[ "$token" == /* ]] || [[ "$token" == "~/"* ]]; then
+          token="$(shorten_path "$token")"
+        fi
+        new_rest+="$token "
+      done
+      cmd="$cmd_base ${new_rest% }"
     fi
+
+    # cwd도 축약
+    cwd="$(shorten_path "$cwd")"
   fi
 
   # cmd 최대 길이 계산
