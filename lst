@@ -39,6 +39,10 @@ while IFS='|' read -r s widx wname pidx tty cwd; do
     prev_w="$widx"
   fi
 
+  # $HOME을 ~로 치환
+  cwd="${cwd/#$HOME/\~}"
+  cmd="${cmd//$HOME/\~}"
+
   if [ "$s" = "$cur_s" ] && [ "$widx" = "$cur_w" ] && [ "$pidx" = "$cur_p" ]; then
     echo "        * ${pidx}: ${cmd}  \"${cwd}\""
   else
