@@ -1,0 +1,50 @@
+#!/bin/bash
+# mkt - tmux 세션/윈도우/pane 생성
+#
+# Usage:
+#   mkt t5           세션 생성
+#   mkt t5:3         윈도우 생성
+#   mkt t5:3.0       pane 생성 (t5:3.0을 split, 기본 좌우)
+#   mkt -h t5:3.0    pane 생성 (좌우 split)
+#   mkt -v t5:3.0    pane 생성 (위아래 split)
+
+split_opt="-h"  # 기본값: 좌우 분할
+
+# 옵션 파싱
+while getopts "hv" opt; do
+  case $opt in
+    h) split_opt="-h" ;;
+    v) split_opt="-v" ;;
+    *) echo "Usage: mkt [-h|-v] <session>[:<window>[.<pane>]]"; exit 1 ;;
+  esac
+done
+shift $((OPTIND-1))
+
+[ -z "$1" ] && { echo "Usage: mkt [-h|-v] <session>[:<window>[.<pane>]]"; exit 1; }
+
+target="$1"
+
+# 패턴 파싱
+if [[ "$target" =~ ^([^:]+):([0-9]+)\.([0-9]+)$ ]]; then
+  # pane 생성 (split)
+  sess="${BASH_REMATCH[1]}"
+  win="${BASH_REMATCH[2]}"
+  pane="${BASH_REMATCH[3]}"
+  tmux split-window $split_opt -t "${sess}:${win}.${pane}"
+elif [[ "$target" =~ ^([^:]+):([0-9]+)$ ]]; then
+  # 윈도우 생성
+  sess="${BASH_REMATCH[1]}"
+  win="${BASH_REMATCH[2]}"
+  if ! tmux has-session -t "$sess" 2>/dev/null; then
+    echo "Session not found: $sess"
+    exit 1
+  fi
+  tmux new-window -t "${sess}:${win}"
+else
+  # 세션 생성
+  if tmux has-session -t "$target" 2>/dev/null; then
+    echo "Session already exists: $target"
+    exit 1
+  fi
+  tmux new-session -d -s "$target"
+fi
