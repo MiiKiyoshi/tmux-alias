@@ -24,12 +24,41 @@ if [ -n "$TMUX" ]; then
   cur_p="${cur_wp#*.}"
 fi
 
-tmux list-panes -a -F '#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_tty}|#{pane_current_path}' 2>/dev/null |
-sort -t '|' -k1,1 -k2,2n -k4,4n |
+# 데이터 수집
+lines=()
+max_cmd_len=0
+
 while IFS='|' read -r s widx wname pidx tty cwd; do
   [ -n "$tty" ] || continue
   cmd=$(ps -t "$tty" -o stat=,args= 2>/dev/null | awk '$1 ~ /\+/{ $1=""; sub(/^ +/,""); print; exit }')
   cmd=${cmd:--}
+
+  # $HOME을 ~로 치환
+  cwd="${cwd/#$HOME/\~}"
+  cmd="${cmd//$HOME/\~}"
+
+  # 기본: 첫 토큰만 basename, -v: 전체 경로
+  if [ "$verbose" -eq 0 ]; then
+    cmd_first="${cmd%% *}"
+    cmd_rest="${cmd#* }"
+    cmd_base="$(basename -- "$cmd_first")"
+    if [ "$cmd_first" = "$cmd" ]; then
+      cmd="$cmd_base"
+    else
+      cmd="$cmd_base $cmd_rest"
+    fi
+  fi
+
+  # cmd 최대 길이 계산
+  len=${#cmd}
+  [ "$len" -gt "$max_cmd_len" ] && max_cmd_len="$len"
+
+  lines+=("$s|$widx|$wname|$pidx|$cmd|$cwd")
+done < <(tmux list-panes -a -F '#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_tty}|#{pane_current_path}' 2>/dev/null | sort -t '|' -k1,1 -k2,2n -k4,4n)
+
+# 출력
+for line in "${lines[@]}"; do
+  IFS='|' read -r s widx wname pidx cmd cwd <<< "$line"
 
   if [ "$s" != "$prev_s" ]; then
     if [ "$s" = "$cur_s" ]; then
@@ -50,25 +79,9 @@ while IFS='|' read -r s widx wname pidx tty cwd; do
     prev_w="$widx"
   fi
 
-  # $HOME을 ~로 치환
-  cwd="${cwd/#$HOME/\~}"
-  cmd="${cmd//$HOME/\~}"
-
-  # 기본: 첫 토큰만 basename, -v: 전체 경로
-  if [ "$verbose" -eq 0 ]; then
-    cmd_first="${cmd%% *}"
-    cmd_rest="${cmd#* }"
-    cmd_base="$(basename -- "$cmd_first")"
-    if [ "$cmd_first" = "$cmd" ]; then
-      cmd="$cmd_base"
-    else
-      cmd="$cmd_base $cmd_rest"
-    fi
-  fi
-
   if [ "$s" = "$cur_s" ] && [ "$widx" = "$cur_w" ] && [ "$pidx" = "$cur_p" ]; then
-    echo "        * ${pidx}: ${cmd}  \"${cwd}\""
+    printf "        * %s: %-${max_cmd_len}s  \"%s\"\n" "$pidx" "$cmd" "$cwd"
   else
-    echo "          ${pidx}: ${cmd}  \"${cwd}\""
+    printf "          %s: %-${max_cmd_len}s  \"%s\"\n" "$pidx" "$cmd" "$cwd"
   fi
 done
