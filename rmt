@@ -1,0 +1,75 @@
+#!/bin/bash
+# rmt - tmux 세션/윈도우/pane 삭제 (패턴 매칭 지원)
+#
+# Usage:
+#   rmt t1       세션 삭제
+#   rmt t*       패턴 매칭 삭제
+#   rmt t1:0     윈도우 삭제
+#   rmt t1:0.1   pane 삭제
+
+[ -z "$1" ] && { echo "Usage: rmt <session-pattern>[:<window>[.<pane>]]..."; exit 1; }
+
+sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null) || { echo "tmux server not running"; exit 1; }
+
+pane_targets=()
+win_targets=()
+sess_matched=()
+
+for arg in "$@"; do
+  if [[ "$arg" =~ ^([^:]+):([0-9]+)\.([0-9]+)$ ]]; then
+    # pane 지정
+    pane_targets+=("$arg")
+  elif [[ "$arg" =~ ^([^:]+):([0-9]+)$ ]]; then
+    # 윈도우 지정
+    win_targets+=("$arg")
+  else
+    # 세션 패턴
+    while read -r s; do
+      [[ "$s" == $arg ]] && sess_matched+=("$s")
+    done <<< "$sessions"
+  fi
+done
+
+# pane 삭제
+if [ ${#pane_targets[@]} -gt 0 ]; then
+  printf 'Panes to delete:\n'
+  printf '  %s\n' "${pane_targets[@]}"
+  read -p "Delete these panes? [y/N] " ans
+  if [[ "$ans" =~ ^[yY]$ ]]; then
+    for target in "${pane_targets[@]}"; do
+      tmux kill-pane -t "$target" 2>/dev/null && echo "Deleted pane: $target"
+    done
+  else
+    echo "Cancelled"
+  fi
+fi
+
+# 윈도우 삭제
+if [ ${#win_targets[@]} -gt 0 ]; then
+  printf 'Windows to delete:\n'
+  printf '  %s\n' "${win_targets[@]}"
+  read -p "Delete these windows? [y/N] " ans
+  if [[ "$ans" =~ ^[yY]$ ]]; then
+    for target in "${win_targets[@]}"; do
+      tmux kill-window -t "$target" 2>/dev/null && echo "Deleted window: $target"
+    done
+  else
+    echo "Cancelled"
+  fi
+fi
+
+# 세션 삭제
+if [ ${#sess_matched[@]} -gt 0 ]; then
+  printf 'Sessions to delete:\n'
+  printf '  %s\n' "${sess_matched[@]}"
+  read -p "Delete these sessions? [y/N] " ans
+  if [[ "$ans" =~ ^[yY]$ ]]; then
+    for s in "${sess_matched[@]}"; do
+      tmux kill-session -t "$s" && echo "Deleted session: $s"
+    done
+  else
+    echo "Cancelled"
+  fi
+fi
+
+[ ${#pane_targets[@]} -eq 0 ] && [ ${#win_targets[@]} -eq 0 ] && [ ${#sess_matched[@]} -eq 0 ] && echo "No matching targets"

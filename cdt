@@ -1,0 +1,27 @@
+#!/bin/bash
+# cdt - tmux 세션/윈도우 접근 (없으면 생성)
+#
+# Usage:
+#   cdt t1      세션 접근/생성
+#   cdt t1:0    특정 윈도우로 접근
+
+[ -z "$1" ] && { echo "Usage: cdt <session>[:<window>]"; exit 1; }
+
+if [[ "$1" =~ ^([^:]+):([0-9]+)$ ]]; then
+  sess="${BASH_REMATCH[1]}"
+  win="${BASH_REMATCH[2]}"
+
+  # 세션 없으면 생성
+  if ! tmux has-session -t "$sess" 2>/dev/null; then
+    tmux new-session -d -s "$sess"
+  fi
+
+  # 윈도우 없으면 생성
+  if ! tmux list-windows -t "$sess" -F '#{window_index}' | grep -qx "$win"; then
+    tmux new-window -t "${sess}:${win}"
+  fi
+
+  tmux attach -t "${sess}:${win}"
+else
+  tmux attach -t "$1" 2>/dev/null || tmux new-session -s "$1"
+fi

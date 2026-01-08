@@ -1,0 +1,79 @@
+#!/bin/bash
+# mvt - tmux 세션 rename / 윈도우·pane 이동
+#
+# Usage:
+#   mvt t1 t5           세션 rename
+#   mvt t1:0 t5         윈도우 이동 (자동 번호)
+#   mvt t1:0 t5:1       윈도우 이동 (지정 번호)
+#   mvt t1:0.0 t5:2     pane 이동 (좌우 분할, 기본)
+#   mvt -h t1:0.0 t5:2  pane 이동 (좌우 분할)
+#   mvt -v t1:0.0 t5:2  pane 이동 (위아래 분할)
+
+split_opt="-h"  # 기본값: 좌우 분할
+
+# 옵션 파싱
+while getopts "hv" opt; do
+  case $opt in
+    h) split_opt="-h" ;;
+    v) split_opt="-v" ;;
+    *) echo "Usage: mvt [-h|-v] <src> <dst>"; exit 1 ;;
+  esac
+done
+shift $((OPTIND-1))
+
+[ $# -ne 2 ] && { echo "Usage: mvt [-h|-v] <src> <dst>"; exit 1; }
+
+src="$1" dst="$2"
+
+# 패턴 파싱: session / session:window / session:window.pane
+if [[ "$src" =~ ^([^:]+):([0-9]+)\.([0-9]+)$ ]]; then
+  src_s="${BASH_REMATCH[1]}" src_w="${BASH_REMATCH[2]}" src_p="${BASH_REMATCH[3]}"
+elif [[ "$src" =~ ^([^:]+):([0-9]+)$ ]]; then
+  src_s="${BASH_REMATCH[1]}" src_w="${BASH_REMATCH[2]}" src_p=""
+else
+  src_s="$src" src_w="" src_p=""
+fi
+
+if [[ "$dst" =~ ^([^:]+):([0-9]+)\.([0-9]+)$ ]]; then
+  dst_s="${BASH_REMATCH[1]}" dst_w="${BASH_REMATCH[2]}" dst_p="${BASH_REMATCH[3]}"
+elif [[ "$dst" =~ ^([^:]+):([0-9]+)$ ]]; then
+  dst_s="${BASH_REMATCH[1]}" dst_w="${BASH_REMATCH[2]}" dst_p=""
+else
+  dst_s="$dst" dst_w="" dst_p=""
+fi
+
+# Case 1: 세션 rename (mvt t1 t5)
+if [ -z "$src_w" ] && [ -z "$dst_w" ]; then
+  if tmux has-session -t "$dst_s" 2>/dev/null; then
+    echo "Session already exists: $dst_s"
+    exit 1
+  fi
+  tmux rename-session -t "$src_s" "$dst_s"
+  exit
+fi
+
+# Case 2: pane 이동 (mvt t1:0.0 t5:2 / mvt t1:0.0 t5:2.1)
+if [ -n "$src_p" ]; then
+  if [ -n "$dst_p" ]; then
+    target="${dst_s}:${dst_w}.${dst_p}"
+  elif [ -n "$dst_w" ]; then
+    target="${dst_s}:${dst_w}"
+  else
+    target="${dst_s}:"
+  fi
+  tmux join-pane $split_opt -s "${src_s}:${src_w}.${src_p}" -t "$target"
+  exit
+fi
+
+# Case 3: 윈도우 이동 (mvt t1:0 t5 / mvt t1:0 t5:1)
+if [ -n "$src_w" ]; then
+  if [ -n "$dst_w" ]; then
+    tmux move-window -d -s "${src_s}:${src_w}" -t "${dst_s}:${dst_w}"
+  else
+    tmux move-window -d -s "${src_s}:${src_w}" -t "${dst_s}:"
+  fi
+  exit
+fi
+
+echo "Invalid pattern"
+exit 1

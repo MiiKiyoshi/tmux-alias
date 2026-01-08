@@ -1,0 +1,47 @@
+#!/bin/bash
+# lst - tmux pane 목록 (계층적 출력, 현재 위치에 * 표시)
+
+prev_s=""
+prev_w=""
+
+# 현재 위치 (tmux 안에서 실행 시에만)
+if [ -n "$TMUX" ]; then
+  cur=$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)
+  cur_s="${cur%%:*}"
+  cur_wp="${cur#*:}"
+  cur_w="${cur_wp%%.*}"
+  cur_p="${cur_wp#*.}"
+fi
+
+tmux list-panes -a -F '#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_tty}|#{pane_current_path}' 2>/dev/null |
+sort -t '|' -k1,1 -k2,2n -k4,4n |
+while IFS='|' read -r s widx wname pidx tty cwd; do
+  [ -n "$tty" ] || continue
+  cmd=$(ps -t "$tty" -o stat=,args= 2>/dev/null | awk '$1 ~ /\+/{ $1=""; sub(/^ +/,""); print; exit }')
+  cmd=${cmd:--}
+
+  if [ "$s" != "$prev_s" ]; then
+    if [ "$s" = "$cur_s" ]; then
+      echo "* $s"
+    else
+      echo "  $s"
+    fi
+    prev_s="$s"
+    prev_w=""
+  fi
+
+  if [ "$widx" != "$prev_w" ]; then
+    if [ "$s" = "$cur_s" ] && [ "$widx" = "$cur_w" ]; then
+      echo "    * ${widx}: ${wname}"
+    else
+      echo "      ${widx}: ${wname}"
+    fi
+    prev_w="$widx"
+  fi
+
+  if [ "$s" = "$cur_s" ] && [ "$widx" = "$cur_w" ] && [ "$pidx" = "$cur_p" ]; then
+    echo "        * ${pidx}: ${cmd}  \"${cwd}\""
+  else
+    echo "          ${pidx}: ${cmd}  \"${cwd}\""
+  fi
+done
