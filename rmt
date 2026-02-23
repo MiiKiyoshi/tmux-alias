@@ -14,6 +14,7 @@ sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null) || { echo "tmux 
 pane_targets=()
 win_targets=()
 sess_matched=()
+no_match=()
 
 for arg in "$@"; do
   if [[ "$arg" =~ ^([^:]+):([0-9]+)\.([0-9]+)$ ]]; then
@@ -24,11 +25,15 @@ for arg in "$@"; do
     win_targets+=("$arg")
   else
     # 세션 패턴
+    found=0
     while read -r s; do
-      [[ "$s" == $arg ]] && sess_matched+=("$s")
+      [[ "$s" == $arg ]] && { sess_matched+=("$s"); found=1; }
     done <<< "$sessions"
+    [ $found -eq 0 ] && no_match+=("$arg")
   fi
 done
+
+[ ${#no_match[@]} -gt 0 ] && printf 'No matching session: %s\n' "${no_match[@]}"
 
 # pane 삭제
 if [ ${#pane_targets[@]} -gt 0 ]; then
