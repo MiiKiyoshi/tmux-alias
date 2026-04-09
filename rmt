@@ -2,10 +2,12 @@
 # rmt - tmux 세션/윈도우/pane 삭제 (패턴 매칭 지원)
 #
 # Usage:
-#   rmt t1       세션 삭제
-#   rmt t*       패턴 매칭 삭제
-#   rmt t1:0     윈도우 삭제
-#   rmt t1:0.1   pane 삭제
+#   rmt t1          세션 삭제
+#   rmt t*          패턴 매칭 삭제
+#   rmt t1:0        인덱스로 윈도우 삭제
+#   rmt t1:train    이름으로 윈도우 삭제
+#   rmt t1:0.1      pane 삭제
+#   rmt t1:train.0  pane 삭제 (이름 기반 윈도우)
 
 [ -z "$1" ] && { echo "Usage: rmt <session-pattern>[:<window>[.<pane>]]..."; exit 1; }
 
@@ -17,14 +19,11 @@ sess_matched=()
 no_match=()
 
 for arg in "$@"; do
-  if [[ "$arg" =~ ^([^:]+):([0-9]+)\.([0-9]+)$ ]]; then
-    # pane 지정
+  if [[ "$arg" =~ ^([^:]+):([^.]+)\.([0-9]+)$ ]]; then
     pane_targets+=("$arg")
-  elif [[ "$arg" =~ ^([^:]+):([0-9]+)$ ]]; then
-    # 윈도우 지정
+  elif [[ "$arg" =~ ^([^:]+):([^.]+)$ ]]; then
     win_targets+=("$arg")
   else
-    # 세션 패턴
     found=0
     while read -r s; do
       [[ "$s" == $arg ]] && { sess_matched+=("$s"); found=1; }
@@ -33,7 +32,8 @@ for arg in "$@"; do
   fi
 done
 
-[ ${#no_match[@]} -gt 0 ] && printf 'No matching session: %s\n' "${no_match[@]}"
+exit_code=0
+[ ${#no_match[@]} -gt 0 ] && { printf 'No matching session: %s\n' "${no_match[@]}" >&2; exit_code=1; }
 
 # pane 삭제
 if [ ${#pane_targets[@]} -gt 0 ]; then
@@ -42,7 +42,21 @@ if [ ${#pane_targets[@]} -gt 0 ]; then
   read -p "Delete these panes? [y/N] " ans
   if [[ "$ans" =~ ^[yY]$ ]]; then
     for target in "${pane_targets[@]}"; do
-      tmux kill-pane -t "$target" 2>/dev/null && echo "Deleted pane: $target"
+      [[ "$target" =~ ^([^:]+):([^.]+)\.([0-9]+)$ ]]
+      sess="${BASH_REMATCH[1]}"
+      win="${BASH_REMATCH[2]}"
+      pane="${BASH_REMATCH[3]}"
+      if [[ "$win" =~ ^[0-9]+$ ]]; then
+        ref="=$sess:${win}.${pane}"
+      else
+        ref="=$sess:=$win.${pane}"
+      fi
+      if tmux kill-pane -t "$ref" 2>/dev/null; then
+        echo "Deleted pane: $target"
+      else
+        echo "rmt: failed to delete pane: $target" >&2
+        exit_code=1
+      fi
     done
   else
     echo "Cancelled"
@@ -56,7 +70,20 @@ if [ ${#win_targets[@]} -gt 0 ]; then
   read -p "Delete these windows? [y/N] " ans
   if [[ "$ans" =~ ^[yY]$ ]]; then
     for target in "${win_targets[@]}"; do
-      tmux kill-window -t "$target" 2>/dev/null && echo "Deleted window: $target"
+      [[ "$target" =~ ^([^:]+):([^.]+)$ ]]
+      sess="${BASH_REMATCH[1]}"
+      win="${BASH_REMATCH[2]}"
+      if [[ "$win" =~ ^[0-9]+$ ]]; then
+        ref="=$sess:$win"
+      else
+        ref="=$sess:=$win"
+      fi
+      if tmux kill-window -t "$ref" 2>/dev/null; then
+        echo "Deleted window: $target"
+      else
+        echo "rmt: failed to delete window: $target" >&2
+        exit_code=1
+      fi
     done
   else
     echo "Cancelled"
@@ -70,11 +97,17 @@ if [ ${#sess_matched[@]} -gt 0 ]; then
   read -p "Delete these sessions? [y/N] " ans
   if [[ "$ans" =~ ^[yY]$ ]]; then
     for s in "${sess_matched[@]}"; do
-      tmux kill-session -t "$s" && echo "Deleted session: $s"
+      if tmux kill-session -t "=$s"; then
+        echo "Deleted session: $s"
+      else
+        echo "rmt: failed to delete session: $s" >&2
+        exit_code=1
+      fi
     done
   else
     echo "Cancelled"
   fi
 fi
 
-[ ${#pane_targets[@]} -eq 0 ] && [ ${#win_targets[@]} -eq 0 ] && [ ${#sess_matched[@]} -eq 0 ] && echo "No matching targets"
+[ ${#pane_targets[@]} -eq 0 ] && [ ${#win_targets[@]} -eq 0 ] && [ ${#sess_matched[@]} -eq 0 ] && [ ${#no_match[@]} -eq 0 ] && { echo "No matching targets" >&2; exit_code=1; }
+exit $exit_code

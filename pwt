@@ -2,4 +2,6 @@
 # pwt - print working tmux (현재 세션:윈도우.pane)
 
 [ -z "$TMUX" ] && { echo "Not in tmux"; exit 1; }
-tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}'
+result=$(tmux display-message -t "$TMUX_PANE" -p '#{session_name}:#{window_index}.#{pane_index}')
+echo "$result"
+printf '\033]52;c;%s\a' "$(printf '%s' "$result" | base64 | tr -d '\n')"

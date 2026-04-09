@@ -2,26 +2,40 @@
 # cdt - tmux 세션/윈도우 접근 (없으면 생성)
 #
 # Usage:
-#   cdt t1      세션 접근/생성
-#   cdt t1:0    특정 윈도우로 접근
+#   cdt t1         세션 접근/생성
+#   cdt t1:0       인덱스로 윈도우 접근
+#   cdt t1:train   이름으로 윈도우 접근
 
-[ -z "$1" ] && { echo "Usage: cdt <session>[:<window>]"; exit 1; }
+[ -z "$1" ] && { echo "Usage: cdt <session>[:<window>]" >&2; exit 1; }
 
-if [[ "$1" =~ ^([^:]+):([0-9]+)$ ]]; then
+if [[ "$1" =~ ^([^:]+):([^.]+)$ ]]; then
   sess="${BASH_REMATCH[1]}"
   win="${BASH_REMATCH[2]}"
 
-  # 세션 없으면 생성
-  if ! tmux has-session -t "$sess" 2>/dev/null; then
+  if ! tmux has-session -t "=$sess" 2>/dev/null; then
     tmux new-session -d -s "$sess"
   fi
 
-  # 윈도우 없으면 생성
-  if ! tmux list-windows -t "$sess" -F '#{window_index}' | grep -qx "$win"; then
-    tmux new-window -t "${sess}:${win}"
+  if [[ "$win" =~ ^[0-9]+$ ]]; then
+    if ! tmux list-windows -t "=$sess" -F '#{window_index}' | grep -qx "$win"; then
+      tmux new-window -t "=$sess:$win"
+    fi
+    target_ref="=$sess:$win"
+  else
+    if ! tmux list-windows -t "=$sess" -F '#{window_name}' | grep -qx "$win"; then
+      tmux new-window -d -t "=$sess" -n "$win"
+    fi
+    target_ref="=$sess:=$win"
   fi
-
-  tmux attach -t "${sess}:${win}"
+  if [ -n "$TMUX" ]; then
+    tmux switch-client -t "$target_ref"
+  else
+    tmux attach -t "$target_ref"
+  fi
 else
-  tmux attach -t "$1" 2>/dev/null || tmux new-session -s "$1"
+  if [ -n "$TMUX" ]; then
+    tmux switch-client -t "=$1" 2>/dev/null || { tmux new-session -d -s "$1" && tmux switch-client -t "=$1"; }
+  else
+    tmux attach -t "=$1" 2>/dev/null || tmux new-session -s "$1"
+  fi
 fi
