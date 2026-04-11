@@ -98,7 +98,7 @@ run_once() {
     total_gpu=$((total_gpu + pane_gpu))
 
     lines+=("$widx|$wname|$pidx|$fg_cmd|$pane_rss|$pane_gpu")
-  done < <(tmux list-panes -t "=$session" -F '#{window_index}|#{window_name}|#{pane_index}|#{pane_tty}' 2>/dev/null | sort -t '|' -k1,1n -k3,3n)
+  done < <(tmux list-panes -s -t "=$session" -F '#{window_index}|#{window_name}|#{pane_index}|#{pane_tty}' 2>/dev/null | sort -t '|' -k1,1n -k3,3n)
 
   if [ "$total_only" -eq 1 ]; then
     echo "CPU: $(fmt_mem $total_rss)  GPU: $(fmt_gpu $total_gpu)"
