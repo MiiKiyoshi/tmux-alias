@@ -94,6 +94,7 @@ Short commands that replace verbose tmux built-ins (`tmux new-session`, `tmux at
 | `mkt` | Create session/window/pane |
 | `mvt` | Rename session / move or rename window/pane |
 | `rmt` | Delete session/window/pane |
+| `stt` | Show CPU/GPU memory per pane |
 
 Windows are referenced by index (`0`, `1`, ...) or name (`train`, `main`, ...).
 All session/window lookups use exact match (`=`) to prevent prefix collisions.
@@ -189,6 +190,24 @@ rmt t1:train.0   # delete pane in named window
 ```
 
 Prompts for confirmation before deleting.
+
+#### stt — memory stats
+
+```bash
+stt llm        # per-pane CPU/GPU memory
+stt llm -t     # total only
+stt llm -w     # watch mode (refresh every 5s)
+stt llm -w -t  # watch total only
+```
+
+Example output:
+```
+llm
+  0: ollama
+    0: ollama  CPU 12.7 MiB     GPU 3.2 GiB
+
+Total  CPU 12.7 MiB  GPU 3.2 GiB
+```
 
 ## License
 

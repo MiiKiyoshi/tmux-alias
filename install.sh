@@ -5,7 +5,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
-COMMANDS=(cdt lst mkt mvt pwt rmt)
+COMMANDS=(cdt lst mkt mvt pwt rmt stt)
 
 # ~/.local/bin 생성
 mkdir -p "$BIN_DIR"

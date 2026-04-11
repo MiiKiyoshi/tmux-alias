@@ -1,0 +1,143 @@
+#!/bin/bash
+# stt - tmux session의 pane별 foreground 프로세스 CPU/GPU 메모리 사용량
+#
+# Usage:
+#   stt <session>       세션 내 pane별 메모리 출력
+#   stt <session> -t    총합만 출력
+#   stt <session> -w    5초마다 갱신 (watch 모드)
+
+total_only=0
+watch_mode=0
+session=""
+
+for arg in "$@"; do
+  case "$arg" in
+    -t) total_only=1 ;;
+    -w) watch_mode=1 ;;
+    *)  session="$arg" ;;
+  esac
+done
+
+if [ -z "$session" ]; then
+  echo "Usage: stt <session> [-t] [-w]" >&2
+  exit 1
+fi
+
+# 세션 존재 확인
+if ! tmux has-session -t "=$session" 2>/dev/null; then
+  echo "Session not found: $session" >&2
+  exit 1
+fi
+
+# 단위 변환 (KiB -> 사람이 읽기 좋은 단위)
+fmt_mem() {
+  local kib=$1
+  if [ "$kib" -ge 1048576 ]; then
+    awk "BEGIN { printf \"%.1f GiB\", $kib/1048576 }"
+  elif [ "$kib" -ge 1024 ]; then
+    awk "BEGIN { printf \"%.1f MiB\", $kib/1024 }"
+  else
+    echo "${kib} KiB"
+  fi
+}
+
+fmt_gpu() {
+  local mib=$1
+  if [ "$mib" -ge 1024 ]; then
+    awk "BEGIN { printf \"%.1f GiB\", $mib/1024 }"
+  elif [ "$mib" -gt 0 ]; then
+    echo "${mib} MiB"
+  else
+    echo "-"
+  fi
+}
+
+run_once() {
+  # GPU 메모리 맵 구축 (pid -> MiB)
+  declare -A gpu_map
+  while IFS=', ' read -r pid mem_mib rest; do
+    [ -z "$pid" ] && continue
+    gpu_map[$pid]=$mem_mib
+  done < <(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null)
+
+  # pane별 수집
+  local total_rss=0
+  local total_gpu=0
+  local lines=()
+
+  while IFS='|' read -r widx wname pidx tty; do
+    [ -n "$tty" ] || continue
+
+    local pane_rss=0
+    local pane_gpu=0
+    local fg_cmd="-"
+
+    while read -r stat pid rss args; do
+      [ -z "$stat" ] && continue
+      [[ "$stat" == *"+"* ]] || continue
+
+      if [ "$fg_cmd" = "-" ]; then
+        local base
+        base=$(basename -- "${args%% *}")
+        case "$base" in
+          bash|zsh|sh|fish) ;;
+          *) fg_cmd="$base" ;;
+        esac
+      fi
+
+      pane_rss=$((pane_rss + rss))
+
+      if [ -n "${gpu_map[$pid]+x}" ]; then
+        pane_gpu=$((pane_gpu + gpu_map[$pid]))
+      fi
+    done < <(ps -t "$tty" -o stat=,pid=,rss=,args= 2>/dev/null)
+
+    [ "$fg_cmd" = "-" ] && fg_cmd="(shell)"
+
+    total_rss=$((total_rss + pane_rss))
+    total_gpu=$((total_gpu + pane_gpu))
+
+    lines+=("$widx|$wname|$pidx|$fg_cmd|$pane_rss|$pane_gpu")
+  done < <(tmux list-panes -t "=$session" -F '#{window_index}|#{window_name}|#{pane_index}|#{pane_tty}' 2>/dev/null | sort -t '|' -k1,1n -k3,3n)
+
+  if [ "$total_only" -eq 1 ]; then
+    echo "CPU: $(fmt_mem $total_rss)  GPU: $(fmt_gpu $total_gpu)"
+    return
+  fi
+
+  # pane별 출력
+  local prev_w=""
+  local max_cmd=0
+  for line in "${lines[@]}"; do
+    IFS='|' read -r _ _ _ cmd _ _ <<< "$line"
+    [ ${#cmd} -gt $max_cmd ] && max_cmd=${#cmd}
+  done
+
+  echo "$session"
+  for line in "${lines[@]}"; do
+    IFS='|' read -r widx wname pidx cmd rss gpu <<< "$line"
+
+    if [ "$widx" != "$prev_w" ]; then
+      echo "  ${widx}: ${wname}"
+      prev_w="$widx"
+    fi
+
+    printf "    %s: %-${max_cmd}s  CPU %-12s GPU %s\n" \
+      "$pidx" "$cmd" "$(fmt_mem "$rss")" "$(fmt_gpu "$gpu")"
+  done
+
+  echo ""
+  echo "Total  CPU $(fmt_mem $total_rss)  GPU $(fmt_gpu $total_gpu)"
+}
+
+if [ "$watch_mode" -eq 1 ]; then
+  trap 'exit 0' INT
+  while true; do
+    clear
+    echo "[$(date '+%H:%M:%S')]"
+    run_once
+    sleep 5
+  done
+else
+  run_once
+fi
