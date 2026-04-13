@@ -2,83 +2,194 @@
 # stt - tmux session의 pane별 foreground 프로세스 CPU/GPU 메모리 사용량
 #
 # Usage:
-#   stt <session>       세션 내 pane별 메모리 출력
-#   stt <session> -t    총합만 출력
-#   stt <session> -w    5초마다 갱신 (watch 모드)
+#   stt                 세션별 총합 (compact)
+#   stt <session>       해당 세션 상세 출력
+#   stt -v              전체 세션 상세 출력
+#   stt -w              5초마다 갱신 (watch 모드)
 
-total_only=0
+verbose=0
 watch_mode=0
 session=""
 
 for arg in "$@"; do
   case "$arg" in
-    -t) total_only=1 ;;
+    -v) verbose=1 ;;
     -w) watch_mode=1 ;;
     *)  session="$arg" ;;
   esac
 done
 
-if [ -z "$session" ]; then
-  echo "Usage: stt <session> [-t] [-w]" >&2
-  exit 1
-fi
-
 # 세션 존재 확인
-if ! tmux has-session -t "=$session" 2>/dev/null; then
-  echo "Session not found: $session" >&2
-  exit 1
+if [ -n "$session" ]; then
+  if ! tmux has-session -t "=$session" 2>/dev/null; then
+    echo "Session not found: $session" >&2
+    exit 1
+  fi
 fi
 
-# 단위 변환 (KiB -> 사람이 읽기 좋은 단위)
+# 출력 모드: 세션 지정 또는 -v → 상세, 그 외 → compact
+if [ -n "$session" ] || [ "$verbose" -eq 1 ]; then
+  detail=1
+else
+  detail=0
+fi
+
+# 색상: 파이프 출력 시 비활성화
+if [ -t 1 ]; then
+  use_color=1
+else
+  use_color=0
+fi
+
+# 초록→노랑→빨강 11단계 색상 테이블 (256-color)
+_clut=(46 82 118 154 190 226 220 214 208 202 196)
+
+# 반환값을 _r에 저장 (서브셸 회피)
 fmt_mem() {
   local kib=$1
   if [ "$kib" -ge 1048576 ]; then
-    awk "BEGIN { printf \"%.1f GiB\", $kib/1048576 }"
+    _r="$((kib / 1048576)).$((kib % 1048576 * 10 / 1048576)) GiB"
   elif [ "$kib" -ge 1024 ]; then
-    awk "BEGIN { printf \"%.1f MiB\", $kib/1024 }"
+    _r="$((kib / 1024)).$((kib % 1024 * 10 / 1024)) MiB"
   else
-    echo "${kib} KiB"
+    _r="${kib} KiB"
   fi
 }
 
 fmt_gpu() {
   local mib=$1
   if [ "$mib" -ge 1024 ]; then
-    awk "BEGIN { printf \"%.1f GiB\", $mib/1024 }"
+    _r="$((mib / 1024)).$((mib % 1024 * 10 / 1024)) GiB"
   elif [ "$mib" -gt 0 ]; then
-    echo "${mib} MiB"
+    _r="${mib} MiB"
   else
-    echo "-"
+    _r="-"
   fi
 }
 
-run_once() {
-  # GPU 메모리 맵 구축 (pid -> MiB)
-  declare -A gpu_map
-  while IFS=', ' read -r pid mem_mib rest; do
-    [ -z "$pid" ] && continue
-    gpu_map[$pid]=$mem_mib
+color_cpu() {
+  local kib=$1; shift
+  if [ "$use_color" -eq 0 ] || [ "$kib" -lt 102400 ]; then
+    printf '%s' "$*"; return
+  fi
+  local idx=$(( (kib - 102400) * 10 / 4091904 ))
+  [ "$idx" -gt 10 ] && idx=10
+  printf '\033[38;5;%dm%s\033[0m' "${_clut[$idx]}" "$*"
+}
+
+color_gpu() {
+  local mib=$1; shift
+  if [ "$use_color" -eq 0 ] || [ "$mib" -le 0 ]; then
+    printf '%s' "$*"; return
+  fi
+  local idx=$(( (mib - 100) * 10 / 3996 ))
+  [ "$idx" -lt 0 ] && idx=0
+  [ "$idx" -gt 10 ] && idx=10
+  printf '\033[38;5;%dm%s\033[0m' "${_clut[$idx]}" "$*"
+}
+
+# 데이터 수집: 외부 프로세스 3회 (nvidia-smi, tmux, ps)
+collect() {
+  # GPU 메모리 맵 (pid -> MiB)
+  declare -gA gpu_map=()
+  while IFS=', ' read -r pid mem_mib _; do
+    [ -n "$pid" ] && gpu_map[$pid]=$mem_mib
   done < <(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null)
 
-  # pane별 수집
-  local total_rss=0
-  local total_gpu=0
-  local lines=()
+  # foreground 프로세스만 tty별로 분류 (전체 ps 순회 1회)
+  declare -gA tty_procs=()
+  while read -r stat pid rss ps_tty args; do
+    [ -z "$stat" ] && continue
+    [[ "$stat" == *"+"* ]] || continue
+    tty_procs[$ps_tty]+="$pid $rss $args"$'\n'
+  done < <(ps -eo stat=,pid=,rss=,tty=,args= 2>/dev/null)
 
-  while IFS='|' read -r widx wname pidx tty; do
+  # tmux pane 목록
+  local tmux_fmt='#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_tty}'
+  if [ -n "$session" ]; then
+    tmux_panes=$(tmux list-panes -s -t "=$session" -F "$tmux_fmt" 2>/dev/null)
+  else
+    tmux_panes=$(tmux list-panes -a -F "$tmux_fmt" 2>/dev/null)
+  fi
+}
+
+render() {
+  [ -z "$tmux_panes" ] && { echo "No tmux sessions found" >&2; return 1; }
+
+  local prev_ses=""
+  local ses_rss=0 ses_gpu=0
+  local ses_lines=() max_cmd=0
+  local first_ses=1
+
+  flush_session() {
+    [ -z "$prev_ses" ] && return
+    if [ "$detail" -eq 0 ]; then
+      # compact: 세션별 한 줄
+      fmt_mem "$ses_rss"; printf -v cpu_pad '%-12s' "$_r"
+      fmt_gpu "$ses_gpu"; printf -v gpu_pad '%s' "$_r"
+      printf '%-20s' "$prev_ses"
+      color_cpu "$ses_rss" "$cpu_pad"
+      printf ' '
+      color_gpu "$ses_gpu" "$gpu_pad"
+      printf '\n'
+    else
+      # 상세: pane별 출력
+      [ "$first_ses" -eq 0 ] && echo "---"
+      local col_offset=$((max_cmd + 7))
+      printf '%-*s  %-12s %s\n' "$col_offset" "$prev_ses" 'CPU' 'GPU'
+      local pw="" f_widx f_wname f_pidx f_cmd f_rss f_gpu
+      for line in "${ses_lines[@]}"; do
+        IFS='|' read -r f_widx f_wname f_pidx f_cmd f_rss f_gpu <<< "$line"
+        if [ "$f_widx" != "$pw" ]; then
+          echo "  ${f_widx}: ${f_wname}"
+          pw="$f_widx"
+        fi
+        fmt_mem "$f_rss"; printf -v cpu_pad '%-12s' "$_r"
+        fmt_gpu "$f_gpu"; printf -v gpu_pad '%s' "$_r"
+        printf '    %s: %-*s  ' "$f_pidx" "$max_cmd" "$f_cmd"
+        color_cpu "$f_rss" "$cpu_pad"
+        printf ' '
+        color_gpu "$f_gpu" "$gpu_pad"
+        printf '\n'
+      done
+      printf '%-*s  ' "$col_offset" 'Total'
+      fmt_mem "$ses_rss"; printf -v cpu_pad '%-12s' "$_r"
+      fmt_gpu "$ses_gpu"; printf -v gpu_pad '%s' "$_r"
+      color_cpu "$ses_rss" "$cpu_pad"
+      printf ' '
+      color_gpu "$ses_gpu" "$gpu_pad"
+      printf '\n'
+    fi
+    first_ses=0
+  }
+
+  # 컬럼 헤더
+  if [ "$detail" -eq 0 ]; then
+    printf '%-20s%-12s %s\n' 'SESSION' 'CPU' 'GPU'
+  fi
+
+  while IFS='|' read -r ses widx wname pidx tty; do
     [ -n "$tty" ] || continue
 
-    local pane_rss=0
-    local pane_gpu=0
-    local fg_cmd="-"
+    if [ "$ses" != "$prev_ses" ]; then
+      flush_session
+      prev_ses="$ses"
+      ses_rss=0
+      ses_gpu=0
+      ses_lines=()
+      max_cmd=0
+    fi
 
-    while read -r stat pid rss args; do
-      [ -z "$stat" ] && continue
-      [[ "$stat" == *"+"* ]] || continue
+    local pane_rss=0 pane_gpu=0 fg_cmd=""
+    local short_tty=${tty#/dev/}
 
-      if [ "$fg_cmd" = "-" ]; then
-        local base
-        base=$(basename -- "${args%% *}")
+    # tty별 전처리된 foreground 프로세스에서 매칭
+    while read -r pid rss args; do
+      [ -z "$pid" ] && continue
+
+      if [ -z "$fg_cmd" ]; then
+        local base=${args%% *}
+        base=${base##*/}
         case "$base" in
           bash|zsh|sh|fish) ;;
           *) fg_cmd="$base" ;;
@@ -86,58 +197,34 @@ run_once() {
       fi
 
       pane_rss=$((pane_rss + rss))
+      [ -n "${gpu_map[$pid]+x}" ] && pane_gpu=$((pane_gpu + gpu_map[$pid]))
+    done <<< "${tty_procs[$short_tty]}"
 
-      if [ -n "${gpu_map[$pid]+x}" ]; then
-        pane_gpu=$((pane_gpu + gpu_map[$pid]))
-      fi
-    done < <(ps -t "$tty" -o stat=,pid=,rss=,args= 2>/dev/null)
+    [ -z "$fg_cmd" ] && fg_cmd="(shell)"
 
-    [ "$fg_cmd" = "-" ] && fg_cmd="(shell)"
+    ses_rss=$((ses_rss + pane_rss))
+    ses_gpu=$((ses_gpu + pane_gpu))
 
-    total_rss=$((total_rss + pane_rss))
-    total_gpu=$((total_gpu + pane_gpu))
+    [ ${#fg_cmd} -gt $max_cmd ] && max_cmd=${#fg_cmd}
+    ses_lines+=("$widx|$wname|$pidx|$fg_cmd|$pane_rss|$pane_gpu")
+  done <<< "$tmux_panes"
 
-    lines+=("$widx|$wname|$pidx|$fg_cmd|$pane_rss|$pane_gpu")
-  done < <(tmux list-panes -s -t "=$session" -F '#{window_index}|#{window_name}|#{pane_index}|#{pane_tty}' 2>/dev/null | sort -t '|' -k1,1n -k3,3n)
-
-  if [ "$total_only" -eq 1 ]; then
-    echo "CPU: $(fmt_mem $total_rss)  GPU: $(fmt_gpu $total_gpu)"
-    return
-  fi
-
-  # pane별 출력
-  local prev_w=""
-  local max_cmd=0
-  for line in "${lines[@]}"; do
-    IFS='|' read -r _ _ _ cmd _ _ <<< "$line"
-    [ ${#cmd} -gt $max_cmd ] && max_cmd=${#cmd}
-  done
-
-  echo "$session"
-  for line in "${lines[@]}"; do
-    IFS='|' read -r widx wname pidx cmd rss gpu <<< "$line"
-
-    if [ "$widx" != "$prev_w" ]; then
-      echo "  ${widx}: ${wname}"
-      prev_w="$widx"
-    fi
-
-    printf "    %s: %-${max_cmd}s  CPU %-12s GPU %s\n" \
-      "$pidx" "$cmd" "$(fmt_mem "$rss")" "$(fmt_gpu "$gpu")"
-  done
-
-  echo ""
-  echo "Total  CPU $(fmt_mem $total_rss)  GPU $(fmt_gpu $total_gpu)"
+  flush_session
 }
 
 if [ "$watch_mode" -eq 1 ]; then
-  trap 'exit 0' INT
+  tmpf="/tmp/stt.$$"
+  tput civis 2>/dev/null
+  trap 'tput cnorm 2>/dev/null; rm -f "$tmpf"; exit 0' INT EXIT
   while true; do
+    collect
+    render > "$tmpf"
     clear
-    echo "[$(date '+%H:%M:%S')]"
-    run_once
+    printf '[%s]\n' "$(date '+%H:%M:%S')"
+    cat "$tmpf"
     sleep 5
   done
 else
-  run_once
+  collect
+  render
 fi
