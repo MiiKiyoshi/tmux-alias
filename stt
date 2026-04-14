@@ -133,24 +133,57 @@ render() {
       color_gpu "$ses_gpu" "$gpu_pad"
       printf '\n'
     else
-      # 상세: pane별 출력
+      # 상세: pane별 출력, single-pane window는 병합
       [ "$first_ses" -eq 0 ] && echo "---"
-      local col_offset=$((max_cmd + 7))
+      # window별 pane 수, single-pane label 최대 길이
+      local -A _wpc=()
+      local _max_label=0
+      local f_widx f_wname f_pidx f_cmd f_rss f_gpu
+      for line in "${ses_lines[@]}"; do
+        IFS='|' read -r f_widx f_wname _ _ _ _ <<< "$line"
+        _wpc[$f_widx]=$(( ${_wpc[$f_widx]:-0} + 1 ))
+      done
+      for line in "${ses_lines[@]}"; do
+        IFS='|' read -r f_widx f_wname _ _ _ _ <<< "$line"
+        if [ "${_wpc[$f_widx]}" -eq 1 ]; then
+          local _ll=$(( ${#f_widx} + 1 + ${#f_wname} ))
+          [ "$_ll" -gt "$_max_label" ] && _max_label="$_ll"
+        fi
+      done
+
+      # col_offset: multi-pane(7+cmd) vs single-pane(2+label+4+cmd) 중 큰 값
+      local col_mp=$((max_cmd + 7))
+      local col_sp=$((_max_label + max_cmd + 6))
+      local col_offset=$(( col_mp > col_sp ? col_mp : col_sp ))
+
       printf '%-*s  %-12s %s\n' "$col_offset" "$prev_ses" 'CPU' 'GPU'
-      local pw="" f_widx f_wname f_pidx f_cmd f_rss f_gpu
+
+      local pw=""
       for line in "${ses_lines[@]}"; do
         IFS='|' read -r f_widx f_wname f_pidx f_cmd f_rss f_gpu <<< "$line"
-        if [ "$f_widx" != "$pw" ]; then
-          echo "  ${f_widx}: ${f_wname}"
-          pw="$f_widx"
-        fi
         fmt_mem "$f_rss"; printf -v cpu_pad '%-12s' "$_r"
         fmt_gpu "$f_gpu"; printf -v gpu_pad '%s' "$_r"
-        printf '    %s: %-*s  ' "$f_pidx" "$max_cmd" "$f_cmd"
-        color_cpu "$f_rss" "$cpu_pad"
-        printf ' '
-        color_gpu "$f_gpu" "$gpu_pad"
-        printf '\n'
+
+        if [ "${_wpc[$f_widx]}" -eq 1 ]; then
+          # single-pane: window+pane 한 줄
+          printf '  %-*s  %-*s  ' "$_max_label" "${f_widx}:${f_wname}" "$((col_offset - _max_label - 4))" "$f_cmd"
+          color_cpu "$f_rss" "$cpu_pad"
+          printf ' '
+          color_gpu "$f_gpu" "$gpu_pad"
+          printf '\n'
+          pw="$f_widx"
+        else
+          # multi-pane: window 헤더 + pane 행
+          if [ "$f_widx" != "$pw" ]; then
+            echo "  ${f_widx}:${f_wname}"
+            pw="$f_widx"
+          fi
+          printf '    %s: %-*s  ' "$f_pidx" "$((col_offset - 7))" "$f_cmd"
+          color_cpu "$f_rss" "$cpu_pad"
+          printf ' '
+          color_gpu "$f_gpu" "$gpu_pad"
+          printf '\n'
+        fi
       done
       printf '%-*s  ' "$col_offset" 'Total'
       fmt_mem "$ses_rss"; printf -v cpu_pad '%-12s' "$_r"
@@ -191,7 +224,7 @@ render() {
         local base=${args%% *}
         base=${base##*/}
         case "$base" in
-          bash|zsh|sh|fish) ;;
+          bash|zsh|sh|fish|-bash|-zsh|-sh|-fish) ;;
           *) fg_cmd="$base" ;;
         esac
       fi

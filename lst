@@ -2,8 +2,8 @@
 # lst - tmux pane 목록 (계층적 출력, 현재 위치에 * 표시)
 #
 # Usage:
-#   lst      기본 (실행파일 basename, 긴 경로 축약)
-#   lst -v   verbose (전체 경로 표시)
+#   lst      compact (window별 한 줄, 프로세스 basename만)
+#   lst -v   verbose (pane별 한 줄, 핵심 인자 + cwd 표시)
 
 verbose=0
 while getopts "v" opt; do
@@ -13,7 +13,6 @@ while getopts "v" opt; do
 done
 
 # 경로 축약: 맨 앞 유지, 중간 첫글자, 마지막 유지
-# ~/tools/micromamba/envs/kiyoshi/bin/gpustat → ~/tools/m/e/k/b/gpustat
 shorten_path() {
   local p="$1"
   local threshold=40
@@ -22,11 +21,9 @@ shorten_path() {
 
   local prefix="" rest="$p"
 
-  # ~/ 또는 / 로 시작하는 경우 첫 디렉토리까지 보존
   if [[ "$p" == "~/"* ]]; then
     prefix="~/"
     rest="${p#\~/}"
-    # 첫 디렉토리 보존
     local first="${rest%%/*}"
     if [[ "$rest" == */* ]]; then
       prefix="~/$first/"
@@ -47,17 +44,14 @@ shorten_path() {
     echo "$p"; return
   fi
 
-  # 마지막 컴포넌트 분리
   local last="${rest##*/}"
   local middle="${rest%/*}"
 
   if [ "$middle" = "$rest" ]; then
-    # 중간 없음
     echo "${prefix}${last}"
     return
   fi
 
-  # 중간 디렉토리들 첫 글자로
   local short_middle=""
   IFS='/' read -ra parts <<< "$middle"
   for part in "${parts[@]}"; do
@@ -67,8 +61,31 @@ shorten_path() {
   echo "${prefix}${short_middle}${last}"
 }
 
-prev_s=""
-prev_w=""
+# cmd에서 basename + 핵심 인자 1개 추출
+extract_cmd_short() {
+  local cmd="$1"
+  local first="${cmd%% *}"
+  local base="${first##*/}"
+
+  if [ "$first" = "$cmd" ]; then
+    echo "$base"
+    return
+  fi
+
+  local rest="${cmd#* }"
+  local key_arg=""
+  for token in $rest; do
+    [[ "$token" == -* ]] && continue
+    key_arg="$(basename -- "$token")"
+    break
+  done
+
+  if [ -n "$key_arg" ]; then
+    echo "$base $key_arg"
+  else
+    echo "$base"
+  fi
+}
 
 # 현재 위치 (tmux 안에서 실행 시에만)
 if [ -n "$TMUX" ]; then
@@ -79,76 +96,164 @@ if [ -n "$TMUX" ]; then
   cur_p="${cur_wp#*.}"
 fi
 
-# 데이터 수집
-lines=()
-max_cmd_len=0
+# foreground 프로세스를 tty별로 1회 수집 (첫 non-shell 우선)
+declare -A tty_fg=()
+declare -A tty_has_cmd=()
+while read -r stat pid tty args; do
+  [ -z "$stat" ] && continue
+  [[ "$stat" == *"+"* ]] || continue
+  local_tty=${tty#/dev/}
+  base=${args%% *}
+  base=${base##*/}
+  case "$base" in
+    bash|zsh|sh|fish|-bash|-zsh|-sh|-fish)
+      [ -z "${tty_fg[$local_tty]+x}" ] && tty_fg[$local_tty]="(shell)" ;;
+    *)
+      [ -z "${tty_has_cmd[$local_tty]+x}" ] && { tty_fg[$local_tty]="$args"; tty_has_cmd[$local_tty]=1; } ;;
+  esac
+done < <(ps -eo stat=,pid=,tty=,args= 2>/dev/null)
 
+# 데이터 수집
+declare -a raw_lines=()
 while IFS='|' read -r s widx wname pidx tty cwd; do
   [ -n "$tty" ] || continue
-  cmd=$(ps -t "$tty" -o stat=,args= 2>/dev/null | awk '$1 ~ /\+/{ $1=""; sub(/^ +/,""); print; exit }')
-  cmd=${cmd:--}
-
-  # $HOME을 ~로 치환
+  local_tty=${tty#/dev/}
+  cmd=${tty_fg[$local_tty]:--}
   cwd="${cwd/#$HOME/\~}"
   cmd="${cmd//$HOME/\~}"
-
-  if [ "$verbose" -eq 0 ]; then
-    # 첫 토큰 basename
-    cmd_first="${cmd%% *}"
-    cmd_rest="${cmd#* }"
-    cmd_base="$(basename -- "$cmd_first")"
-
-    if [ "$cmd_first" = "$cmd" ]; then
-      cmd="$cmd_base"
-    else
-      # 나머지 토큰들 경로 축약
-      new_rest=""
-      for token in $cmd_rest; do
-        if [[ "$token" == /* ]] || [[ "$token" == "~/"* ]]; then
-          token="$(shorten_path "$token")"
-        fi
-        new_rest+="$token "
-      done
-      cmd="$cmd_base ${new_rest% }"
-    fi
-
-    # cwd도 축약
-    cwd="$(shorten_path "$cwd")"
-  fi
-
-  # cmd 최대 길이 계산
-  len=${#cmd}
-  [ "$len" -gt "$max_cmd_len" ] && max_cmd_len="$len"
-
-  lines+=("$s|$widx|$wname|$pidx|$cmd|$cwd")
+  raw_lines+=("$s|$widx|$wname|$pidx|$cmd|$cwd")
 done < <(tmux list-panes -a -F '#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_tty}|#{pane_current_path}' 2>/dev/null | sort -t '|' -k1,1 -k2,2n -k4,4n)
 
-# 출력
-for line in "${lines[@]}"; do
-  IFS='|' read -r s widx wname pidx cmd cwd <<< "$line"
+if [ "$verbose" -eq 1 ]; then
+  # ── verbose: pane별 출력, single-pane window는 병합 ──
 
-  if [ "$s" != "$prev_s" ]; then
-    if [ "$s" = "$cur_s" ]; then
-      echo "* $s"
-    else
-      echo "  $s"
+  # window별 pane 수 세기
+  declare -A win_pane_count=()
+  for line in "${raw_lines[@]}"; do
+    IFS='|' read -r s widx _ _ _ _ <<< "$line"
+    key="$s|$widx"
+    win_pane_count[$key]=$(( ${win_pane_count[$key]:-0} + 1 ))
+  done
+
+  # cmd/cwd 가공 후 저장
+  declare -a lines=()
+  max_cmd_len=0
+  for line in "${raw_lines[@]}"; do
+    IFS='|' read -r s widx wname pidx cmd cwd <<< "$line"
+    cmd="$(extract_cmd_short "$cmd")"
+    cwd="$(shorten_path "$cwd")"
+    len=${#cmd}
+    [ "$len" -gt "$max_cmd_len" ] && max_cmd_len="$len"
+    lines+=("$s|$widx|$wname|$pidx|$cmd|$cwd")
+  done
+
+  prev_s=""
+  prev_w=""
+  for line in "${lines[@]}"; do
+    IFS='|' read -r s widx wname pidx cmd cwd <<< "$line"
+
+    if [ "$s" != "$prev_s" ]; then
+      if [ "$s" = "$cur_s" ]; then
+        echo "* $s"
+      else
+        echo "  $s"
+      fi
+      prev_s="$s"
+      prev_w=""
     fi
-    prev_s="$s"
-    prev_w=""
-  fi
 
-  if [ "$widx" != "$prev_w" ]; then
-    if [ "$s" = "$cur_s" ] && [ "$widx" = "$cur_w" ]; then
-      echo "    * ${widx}: ${wname}"
+    key="$s|$widx"
+    npc=${win_pane_count[$key]}
+    is_cur_w=0
+    [ "$s" = "$cur_s" ] && [ "$widx" = "$cur_w" ] && is_cur_w=1
+
+    if [ "$npc" -eq 1 ]; then
+      # single-pane: window+pane 병합
+      if [ "$is_cur_w" -eq 1 ]; then
+        printf "    * %s:%s    %-${max_cmd_len}s  \"%s\"\n" "$widx" "$wname" "$cmd" "$cwd"
+      else
+        printf "      %s:%s    %-${max_cmd_len}s  \"%s\"\n" "$widx" "$wname" "$cmd" "$cwd"
+      fi
+      prev_w="$widx"
     else
-      echo "      ${widx}: ${wname}"
+      # multi-pane: window 헤더 + pane 행
+      if [ "$widx" != "$prev_w" ]; then
+        if [ "$is_cur_w" -eq 1 ]; then
+          echo "    * ${widx}:${wname}"
+        else
+          echo "      ${widx}:${wname}"
+        fi
+        prev_w="$widx"
+      fi
+      if [ "$is_cur_w" -eq 1 ] && [ "$pidx" = "$cur_p" ]; then
+        printf "        * %s: %-${max_cmd_len}s  \"%s\"\n" "$pidx" "$cmd" "$cwd"
+      else
+        printf "          %s: %-${max_cmd_len}s  \"%s\"\n" "$pidx" "$cmd" "$cwd"
+      fi
     fi
-    prev_w="$widx"
-  fi
+  done
+else
+  # ── compact: window별 한 줄, basename만 ──
 
-  if [ "$s" = "$cur_s" ] && [ "$widx" = "$cur_w" ] && [ "$pidx" = "$cur_p" ]; then
-    printf "        * %s: %-${max_cmd_len}s  \"%s\"\n" "$pidx" "$cmd" "$cwd"
-  else
-    printf "          %s: %-${max_cmd_len}s  \"%s\"\n" "$pidx" "$cmd" "$cwd"
-  fi
-done
+  # window별 pane cmd basename 수집
+  declare -A win_cmds=()
+  declare -A win_sessions=()
+  declare -A win_names=()
+  declare -a win_order=()
+
+  for line in "${raw_lines[@]}"; do
+    IFS='|' read -r s widx wname pidx cmd cwd <<< "$line"
+    key="$s|$widx"
+
+    # basename 추출
+    first="${cmd%% *}"
+    base="${first##*/}"
+
+    if [ -z "${win_sessions[$key]+x}" ]; then
+      win_order+=("$key")
+      win_sessions[$key]="$s"
+      win_names[$key]="$wname"
+      win_cmds[$key]="$base"
+    else
+      win_cmds[$key]="${win_cmds[$key]}, $base"
+    fi
+  done
+
+  prev_s=""
+  max_info_len=0
+  declare -a out_lines=()
+
+  for key in "${win_order[@]}"; do
+    s="${win_sessions[$key]}"
+    widx="${key#*|}"
+    wname="${win_names[$key]}"
+    cmds="${win_cmds[$key]}"
+    info="${widx}:${wname}"
+    len=${#info}
+    [ "$len" -gt "$max_info_len" ] && max_info_len="$len"
+    out_lines+=("$s|$info|$cmds")
+  done
+
+  for out in "${out_lines[@]}"; do
+    IFS='|' read -r s info cmds <<< "$out"
+
+    if [ "$s" != "$prev_s" ]; then
+      if [ "$s" = "$cur_s" ]; then
+        echo "* $s"
+      else
+        echo "  $s"
+      fi
+      prev_s="$s"
+    fi
+
+    widx="${info%%:*}"
+    is_cur_w=0
+    [ "$s" = "$cur_s" ] && [ "$widx" = "$cur_w" ] && is_cur_w=1
+
+    if [ "$is_cur_w" -eq 1 ]; then
+      printf "    * %-${max_info_len}s    %s\n" "$info" "$cmds"
+    else
+      printf "      %-${max_info_len}s    %s\n" "$info" "$cmds"
+    fi
+  done
+fi
