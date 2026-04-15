@@ -109,6 +109,12 @@ cd tmux-alias
 
 Creates symlinks in `~/.local/bin`. Prompts to add it to PATH if not already there.
 
+**macOS**: `lst` and `stt` require bash 4+. The system bash is 3.2, so install a newer one:
+
+```bash
+brew install bash
+```
+
 ### Uninstall
 
 ```bash
