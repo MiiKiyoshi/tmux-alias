@@ -94,16 +94,20 @@ color_gpu() {
   printf '\033[38;5;%dm%s\033[0m' "${_clut[$idx]}" "$*"
 }
 
+# 글로벌 연관 배열 (bash 3.2 호환: 함수 내 declare -gA 불가)
+declare -A gpu_map=()
+declare -A tty_procs=()
+
 # 데이터 수집: 외부 프로세스 3회 (nvidia-smi, tmux, ps)
 collect() {
   # GPU 메모리 맵 (pid -> MiB)
-  declare -gA gpu_map=()
+  gpu_map=()
   while IFS=', ' read -r pid mem_mib _; do
     [ -n "$pid" ] && gpu_map[$pid]=$mem_mib
   done < <(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null)
 
   # foreground 프로세스만 tty별로 분류 (전체 ps 순회 1회)
-  declare -gA tty_procs=()
+  tty_procs=()
   while read -r stat pid rss ps_tty args; do
     [ -z "$stat" ] && continue
     [[ "$stat" == *"+"* ]] || continue
