@@ -6,17 +6,23 @@
 #   stt <session>       해당 세션 상세 출력
 #   stt -v              전체 세션 상세 출력
 #   stt -w              5초마다 갱신 (watch 모드)
+#   stt -w 3            3초마다 갱신
 
 verbose=0
 watch_mode=0
+watch_interval=5
 session=""
 
-for arg in "$@"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     -v) verbose=1 ;;
-    -w) watch_mode=1 ;;
-    *)  session="$arg" ;;
+    -w) watch_mode=1
+        if [ -n "$2" ] && [[ "$2" =~ ^[0-9]+$ ]]; then
+          watch_interval="$2"; shift
+        fi ;;
+    *)  session="$1" ;;
   esac
+  shift
 done
 
 # 세션 존재 확인
@@ -116,110 +122,30 @@ collect() {
 render() {
   [ -z "$tmux_panes" ] && { echo "No tmux sessions found" >&2; return 1; }
 
+  # 1단계: 전체 데이터 수집 (세션별 pane 정보 + 메모리)
+  local all_sessions=()   # 세션 이름 순서
+  local -A ses_data=()    # ses -> "widx|wname|pidx|cmd|rss|gpu\n..."
+  local -A ses_rss_map=() ses_gpu_map=()
   local prev_ses=""
-  local ses_rss=0 ses_gpu=0
-  local ses_lines=() max_cmd=0
-  local first_ses=1
-
-  flush_session() {
-    [ -z "$prev_ses" ] && return
-    if [ "$detail" -eq 0 ]; then
-      # compact: 세션별 한 줄
-      fmt_mem "$ses_rss"; printf -v cpu_pad '%-12s' "$_r"
-      fmt_gpu "$ses_gpu"; printf -v gpu_pad '%s' "$_r"
-      printf '%-20s' "$prev_ses"
-      color_cpu "$ses_rss" "$cpu_pad"
-      printf ' '
-      color_gpu "$ses_gpu" "$gpu_pad"
-      printf '\n'
-    else
-      # 상세: pane별 출력, single-pane window는 병합
-      [ "$first_ses" -eq 0 ] && echo "---"
-      # window별 pane 수, single-pane label 최대 길이
-      local -A _wpc=()
-      local _max_label=0
-      local f_widx f_wname f_pidx f_cmd f_rss f_gpu
-      for line in "${ses_lines[@]}"; do
-        IFS='|' read -r f_widx f_wname _ _ _ _ <<< "$line"
-        _wpc[$f_widx]=$(( ${_wpc[$f_widx]:-0} + 1 ))
-      done
-      for line in "${ses_lines[@]}"; do
-        IFS='|' read -r f_widx f_wname _ _ _ _ <<< "$line"
-        if [ "${_wpc[$f_widx]}" -eq 1 ]; then
-          local _ll=$(( ${#f_widx} + 1 + ${#f_wname} ))
-          [ "$_ll" -gt "$_max_label" ] && _max_label="$_ll"
-        fi
-      done
-
-      # col_offset: multi-pane(7+cmd) vs single-pane(2+label+4+cmd) 중 큰 값
-      local col_mp=$((max_cmd + 7))
-      local col_sp=$((_max_label + max_cmd + 6))
-      local col_offset=$(( col_mp > col_sp ? col_mp : col_sp ))
-
-      printf '%-*s  %-12s %s\n' "$col_offset" "$prev_ses" 'CPU' 'GPU'
-
-      local pw=""
-      for line in "${ses_lines[@]}"; do
-        IFS='|' read -r f_widx f_wname f_pidx f_cmd f_rss f_gpu <<< "$line"
-        fmt_mem "$f_rss"; printf -v cpu_pad '%-12s' "$_r"
-        fmt_gpu "$f_gpu"; printf -v gpu_pad '%s' "$_r"
-
-        if [ "${_wpc[$f_widx]}" -eq 1 ]; then
-          # single-pane: window+pane 한 줄
-          printf '  %-*s  %-*s  ' "$_max_label" "${f_widx}:${f_wname}" "$((col_offset - _max_label - 4))" "$f_cmd"
-          color_cpu "$f_rss" "$cpu_pad"
-          printf ' '
-          color_gpu "$f_gpu" "$gpu_pad"
-          printf '\n'
-          pw="$f_widx"
-        else
-          # multi-pane: window 헤더 + pane 행
-          if [ "$f_widx" != "$pw" ]; then
-            echo "  ${f_widx}:${f_wname}"
-            pw="$f_widx"
-          fi
-          printf '    %s: %-*s  ' "$f_pidx" "$((col_offset - 7))" "$f_cmd"
-          color_cpu "$f_rss" "$cpu_pad"
-          printf ' '
-          color_gpu "$f_gpu" "$gpu_pad"
-          printf '\n'
-        fi
-      done
-      printf '%-*s  ' "$col_offset" 'Total'
-      fmt_mem "$ses_rss"; printf -v cpu_pad '%-12s' "$_r"
-      fmt_gpu "$ses_gpu"; printf -v gpu_pad '%s' "$_r"
-      color_cpu "$ses_rss" "$cpu_pad"
-      printf ' '
-      color_gpu "$ses_gpu" "$gpu_pad"
-      printf '\n'
-    fi
-    first_ses=0
-  }
-
-  # 컬럼 헤더
-  if [ "$detail" -eq 0 ]; then
-    printf '%-20s%-12s %s\n' 'SESSION' 'CPU' 'GPU'
-  fi
 
   while IFS='|' read -r ses widx wname pidx tty; do
     [ -n "$tty" ] || continue
 
     if [ "$ses" != "$prev_ses" ]; then
-      flush_session
+      [ -n "$prev_ses" ] || true
+      if [ "$ses" != "$prev_ses" ]; then
+        all_sessions+=("$ses")
+        ses_rss_map[$ses]=0
+        ses_gpu_map[$ses]=0
+      fi
       prev_ses="$ses"
-      ses_rss=0
-      ses_gpu=0
-      ses_lines=()
-      max_cmd=0
     fi
 
     local pane_rss=0 pane_gpu=0 fg_cmd=""
     local short_tty=${tty#/dev/}
 
-    # tty별 전처리된 foreground 프로세스에서 매칭
     while read -r pid rss args; do
       [ -z "$pid" ] && continue
-
       if [ -z "$fg_cmd" ]; then
         local base=${args%% *}
         base=${base##*/}
@@ -228,21 +154,117 @@ render() {
           *) fg_cmd="$base" ;;
         esac
       fi
-
       pane_rss=$((pane_rss + rss))
       [ -n "${gpu_map[$pid]+x}" ] && pane_gpu=$((pane_gpu + gpu_map[$pid]))
     done <<< "${tty_procs[$short_tty]}"
 
     [ -z "$fg_cmd" ] && fg_cmd="(shell)"
 
-    ses_rss=$((ses_rss + pane_rss))
-    ses_gpu=$((ses_gpu + pane_gpu))
-
-    [ ${#fg_cmd} -gt $max_cmd ] && max_cmd=${#fg_cmd}
-    ses_lines+=("$widx|$wname|$pidx|$fg_cmd|$pane_rss|$pane_gpu")
+    ses_rss_map[$ses]=$(( ${ses_rss_map[$ses]} + pane_rss ))
+    ses_gpu_map[$ses]=$(( ${ses_gpu_map[$ses]} + pane_gpu ))
+    ses_data[$ses]+="$widx|$wname|$pidx|$fg_cmd|$pane_rss|$pane_gpu"$'\n'
   done <<< "$tmux_panes"
 
-  flush_session
+  # compact 모드
+  if [ "$detail" -eq 0 ]; then
+    printf '%-20s%-12s %s\n' 'SESSION' 'CPU' 'GPU'
+    for ses in "${all_sessions[@]}"; do
+      fmt_mem "${ses_rss_map[$ses]}"; printf -v cpu_pad '%-12s' "$_r"
+      fmt_gpu "${ses_gpu_map[$ses]}"; printf -v gpu_pad '%s' "$_r"
+      printf '%-20s' "$ses"
+      color_cpu "${ses_rss_map[$ses]}" "$cpu_pad"
+      printf ' '
+      color_gpu "${ses_gpu_map[$ses]}" "$gpu_pad"
+      printf '\n'
+    done
+    return
+  fi
+
+  # 2단계: global col_offset 계산
+  local g_max_cmd=0 g_max_label=0
+  local f_widx f_wname f_pidx f_cmd f_rss f_gpu
+  for ses in "${all_sessions[@]}"; do
+    local -A _wpc=()
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      IFS='|' read -r f_widx f_wname f_pidx f_cmd _ _ <<< "$line"
+      _wpc[$f_widx]=$(( ${_wpc[$f_widx]:-0} + 1 ))
+      [ ${#f_cmd} -gt $g_max_cmd ] && g_max_cmd=${#f_cmd}
+    done <<< "${ses_data[$ses]}"
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      IFS='|' read -r f_widx f_wname _ _ _ _ <<< "$line"
+      if [ "${_wpc[$f_widx]}" -eq 1 ]; then
+        local _ll=$(( ${#f_widx} + 1 + ${#f_wname} ))
+        [ "$_ll" -gt "$g_max_label" ] && g_max_label="$_ll"
+      fi
+    done <<< "${ses_data[$ses]}"
+  done
+
+  local col_mp=$((g_max_cmd + 7))
+  local col_sp=$((g_max_label + g_max_cmd + 6))
+  local col_offset=$(( col_mp > col_sp ? col_mp : col_sp ))
+
+  # 3단계: 렌더링
+  local first_ses=1
+  for ses in "${all_sessions[@]}"; do
+    [ "$first_ses" -eq 0 ] && echo "---"
+
+    local -A _wpc=()
+    local _max_label=0
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      IFS='|' read -r f_widx f_wname _ _ _ _ <<< "$line"
+      _wpc[$f_widx]=$(( ${_wpc[$f_widx]:-0} + 1 ))
+    done <<< "${ses_data[$ses]}"
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      IFS='|' read -r f_widx f_wname _ _ _ _ <<< "$line"
+      if [ "${_wpc[$f_widx]}" -eq 1 ]; then
+        local _ll=$(( ${#f_widx} + 1 + ${#f_wname} ))
+        [ "$_ll" -gt "$_max_label" ] && _max_label="$_ll"
+      fi
+    done <<< "${ses_data[$ses]}"
+
+    printf '%-*s  %-12s %s\n' "$col_offset" "$ses" 'CPU' 'GPU'
+
+    local pw=""
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      IFS='|' read -r f_widx f_wname f_pidx f_cmd f_rss f_gpu <<< "$line"
+      fmt_mem "$f_rss"; printf -v cpu_pad '%-12s' "$_r"
+      fmt_gpu "$f_gpu"; printf -v gpu_pad '%s' "$_r"
+
+      if [ "${_wpc[$f_widx]}" -eq 1 ]; then
+        printf '  %-*s  %-*s  ' "$g_max_label" "${f_widx}:${f_wname}" "$((col_offset - g_max_label - 4))" "$f_cmd"
+        color_cpu "$f_rss" "$cpu_pad"
+        printf ' '
+        color_gpu "$f_gpu" "$gpu_pad"
+        printf '\n'
+        pw="$f_widx"
+      else
+        if [ "$f_widx" != "$pw" ]; then
+          echo "  ${f_widx}:${f_wname}"
+          pw="$f_widx"
+        fi
+        printf '    %s: %-*s  ' "$f_pidx" "$((col_offset - 7))" "$f_cmd"
+        color_cpu "$f_rss" "$cpu_pad"
+        printf ' '
+        color_gpu "$f_gpu" "$gpu_pad"
+        printf '\n'
+      fi
+    done <<< "${ses_data[$ses]}"
+
+    printf '%-*s  ' "$col_offset" 'Total'
+    fmt_mem "${ses_rss_map[$ses]}"; printf -v cpu_pad '%-12s' "$_r"
+    fmt_gpu "${ses_gpu_map[$ses]}"; printf -v gpu_pad '%s' "$_r"
+    color_cpu "${ses_rss_map[$ses]}" "$cpu_pad"
+    printf ' '
+    color_gpu "${ses_gpu_map[$ses]}" "$gpu_pad"
+    printf '\n'
+
+    first_ses=0
+  done
 }
 
 if [ "$watch_mode" -eq 1 ]; then
@@ -255,7 +277,7 @@ if [ "$watch_mode" -eq 1 ]; then
     clear
     printf '[%s]\n' "$(date '+%H:%M:%S')"
     cat "$tmpf"
-    sleep 5
+    sleep "$watch_interval"
   done
 else
   collect
