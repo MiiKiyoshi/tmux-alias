@@ -194,19 +194,20 @@ Prompts for confirmation before deleting.
 #### stt — memory stats
 
 ```bash
-stt llm        # per-pane CPU/GPU memory
-stt llm -t     # total only
-stt llm -w     # watch mode (refresh every 5s)
-stt llm -w -t  # watch total only
+stt              # compact (session-level totals)
+stt -v           # per-pane detail (all sessions)
+stt llm          # per-pane detail (single session)
+stt -w           # watch mode (refresh every 5s)
+stt -w 3         # watch mode (refresh every 3s)
+stt -w -v        # watch + detail
 ```
 
-Example output:
+Example output (`stt -v`):
 ```
-llm
-  0: ollama
-    0: ollama  CPU 12.7 MiB     GPU 3.2 GiB
-
-Total  CPU 12.7 MiB  GPU 3.2 GiB
+llm                    CPU          GPU
+  0:ollama
+    0: ollama          12.7 MiB     3.2 GiB
+Total                  12.7 MiB     3.2 GiB
 ```
 
 ## License
