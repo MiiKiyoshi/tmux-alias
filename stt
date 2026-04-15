@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # stt - tmux session의 pane별 foreground 프로세스 CPU/GPU 메모리 사용량
 #
 # Usage:

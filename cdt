@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # cdt - tmux 세션/윈도우 접근 (없으면 생성)
 #
 # Usage:

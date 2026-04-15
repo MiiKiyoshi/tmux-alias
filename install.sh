@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # tmux_alias 설치 스크립트
 
 set -e

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # pwt - print working tmux (현재 세션:윈도우.pane)
 
 [ -z "$TMUX" ] && { echo "Not in tmux"; exit 1; }

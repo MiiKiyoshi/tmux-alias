@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # rmt - tmux 세션/윈도우/pane 삭제 (패턴 매칭 지원)
 #
 # Usage:

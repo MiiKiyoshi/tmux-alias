@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # tmux_alias 삭제 스크립트
 
 BIN_DIR="$HOME/.local/bin"

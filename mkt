@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # mkt - tmux 세션/윈도우/pane 생성
 #
 # Usage:

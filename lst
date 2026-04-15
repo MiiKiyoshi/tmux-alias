@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # lst - tmux pane 목록 (계층적 출력, 현재 위치에 * 표시)
 #
 # Usage:

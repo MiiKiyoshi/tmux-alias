@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # mvt - tmux 세션 rename / 윈도우·pane 이동 및 이름 지정
 #
 # Usage:
