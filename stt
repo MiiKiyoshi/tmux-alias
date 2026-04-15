@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+if ((BASH_VERSINFO[0] < 4)); then
+  for p in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    [ -x "$p" ] && exec "$p" "$0" "$@"
+  done
+  echo "bash 4+ required" >&2; exit 1
+fi
 # stt - tmux session의 pane별 foreground 프로세스 CPU/GPU 메모리 사용량
 #
 # Usage:

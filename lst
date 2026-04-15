@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+if ((BASH_VERSINFO[0] < 4)); then
+  for p in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    [ -x "$p" ] && exec "$p" "$0" "$@"
+  done
+  echo "bash 4+ required" >&2; exit 1
+fi
 # lst - tmux pane 목록 (계층적 출력, 현재 위치에 * 표시)
 #
 # Usage:
