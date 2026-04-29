@@ -177,11 +177,18 @@ render() {
 
   # compact 모드
   if [ "$detail" -eq 0 ]; then
-    printf '%-20s%-12s %s\n' 'SESSION' 'CPU' 'GPU'
+    # 세션 이름 최대 길이 계산 (최소 7: "SESSION" 헤더)
+    local name_w=7
+    for ses in "${all_sessions[@]}"; do
+      [ ${#ses} -gt $name_w ] && name_w=${#ses}
+    done
+    name_w=$((name_w + 2))
+
+    printf '%-*s%-12s %s\n' "$name_w" 'SESSION' 'CPU' 'GPU'
     for ses in "${all_sessions[@]}"; do
       fmt_mem "${ses_rss_map[$ses]}"; printf -v cpu_pad '%-12s' "$_r"
       fmt_gpu "${ses_gpu_map[$ses]}"; printf -v gpu_pad '%s' "$_r"
-      printf '%-20s' "$ses"
+      printf '%-*s' "$name_w" "$ses"
       color_cpu "${ses_rss_map[$ses]}" "$cpu_pad"
       printf ' '
       color_gpu "${ses_gpu_map[$ses]}" "$gpu_pad"
