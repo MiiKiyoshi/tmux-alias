@@ -185,6 +185,7 @@ render() {
     name_w=$((name_w + 2))
 
     printf '%-*s%-12s %s\n' "$name_w" 'SESSION' 'CPU' 'GPU'
+    local total_rss=0 total_gpu=0
     for ses in "${all_sessions[@]}"; do
       fmt_mem "${ses_rss_map[$ses]}"; printf -v cpu_pad '%-12s' "$_r"
       fmt_gpu "${ses_gpu_map[$ses]}"; printf -v gpu_pad '%s' "$_r"
@@ -193,7 +194,16 @@ render() {
       printf ' '
       color_gpu "${ses_gpu_map[$ses]}" "$gpu_pad"
       printf '\n'
+      total_rss=$((total_rss + ses_rss_map[$ses]))
+      total_gpu=$((total_gpu + ses_gpu_map[$ses]))
     done
+    fmt_mem "$total_rss"; printf -v cpu_pad '%-12s' "$_r"
+    fmt_gpu "$total_gpu"; printf -v gpu_pad '%s' "$_r"
+    printf '%-*s' "$name_w" 'Total'
+    color_cpu "$total_rss" "$cpu_pad"
+    printf ' '
+    color_gpu "$total_gpu" "$gpu_pad"
+    printf '\n'
     return
   fi
 
@@ -224,6 +234,7 @@ render() {
 
   # 3단계: 렌더링
   local first_ses=1
+  local grand_rss=0 grand_gpu=0
   for ses in "${all_sessions[@]}"; do
     [ "$first_ses" -eq 0 ] && echo "---"
 
@@ -280,8 +291,21 @@ render() {
     color_gpu "${ses_gpu_map[$ses]}" "$gpu_pad"
     printf '\n'
 
+    grand_rss=$((grand_rss + ses_rss_map[$ses]))
+    grand_gpu=$((grand_gpu + ses_gpu_map[$ses]))
     first_ses=0
   done
+
+  if [ "${#all_sessions[@]}" -gt 1 ]; then
+    echo "==="
+    printf '%-*s  ' "$col_offset" 'Grand Total'
+    fmt_mem "$grand_rss"; printf -v cpu_pad '%-12s' "$_r"
+    fmt_gpu "$grand_gpu"; printf -v gpu_pad '%s' "$_r"
+    color_cpu "$grand_rss" "$cpu_pad"
+    printf ' '
+    color_gpu "$grand_gpu" "$gpu_pad"
+    printf '\n'
+  fi
 }
 
 if [ "$watch_mode" -eq 1 ]; then
