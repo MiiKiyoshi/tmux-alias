@@ -34,4 +34,17 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
     echo ""
 fi
 
+# Completion
+COMP_FILE="$SCRIPT_DIR/completion/tmux_alias.bash"
+echo ""
+echo "Tab completion (optional). Add to your shell config:"
+echo ""
+echo "  bash (~/.bashrc):"
+echo "    source \"$COMP_FILE\""
+echo ""
+echo "  zsh (~/.zshrc):"
+echo "    autoload -Uz bashcompinit && bashcompinit"
+echo "    source \"$COMP_FILE\""
+echo ""
+
 echo "Done."

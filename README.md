@@ -115,6 +115,23 @@ Creates symlinks in `~/.local/bin`. Prompts to add it to PATH if not already the
 brew install bash
 ```
 
+### Tab completion (optional)
+
+A completion script is provided for session, window, and pane names. Works in bash directly, and in zsh via `bashcompinit`.
+
+**bash** — add to `~/.bashrc`:
+```bash
+source /path/to/tmux_alias/completion/tmux_alias.bash
+```
+
+**zsh** — add to `~/.zshrc`:
+```bash
+autoload -Uz bashcompinit && bashcompinit
+source /path/to/tmux_alias/completion/tmux_alias.bash
+```
+
+Then `cdt <Tab>` lists sessions, `cdt t1:<Tab>` lists windows, `mkt t1:0.<Tab>` lists pane indices.
+
 ### Uninstall
 
 ```bash
