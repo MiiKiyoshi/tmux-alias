@@ -2,7 +2,7 @@
 # tmux_alias 삭제 스크립트
 
 BIN_DIR="$HOME/.local/bin"
-COMMANDS=(cdt lst mkt mvt pwt rmt)
+COMMANDS=(cdt lst mkt mvt pwt rmt stt)
 
 for cmd in "${COMMANDS[@]}"; do
     dst="$BIN_DIR/$cmd"
